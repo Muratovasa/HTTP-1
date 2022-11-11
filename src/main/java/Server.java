@@ -1,31 +1,81 @@
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class Server {
-    public Socket start() throws IOException {
-        final var serverSocket = new ServerSocket(9999);
-        return serverSocket.accept();
+    final static int PORT = 9999;
+
+    public void start() {
+        var countThread = 64;
+        final ExecutorService threadPool = Executors.newFixedThreadPool(countThread);
+        try (final var serverSocket = new ServerSocket(PORT)) {
+            while (true) {
+                try {
+                    final var socket = serverSocket.accept();
+                    connect(socket, threadPool);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
+    private void connect(Socket socket, ExecutorService threadPool) {
+        final var validPaths = List.of("/index.html", "/spring.svg", "/spring.png",
+                "/resources.html", "/styles.css", "/app.js", "/links.html", "/forms.html",
+                "/classic.html", "/events.html", "/events.js");
+        threadPool.submit(() -> {
+            try (final var in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                 final var out = new BufferedOutputStream(socket.getOutputStream());
+            ) {
+                while (true) {
+                    final var requestLine = in.readLine();
+                    final var parts = requestLine.split(" ");
 
-    public String[] connect() throws IOException {
-        while (true) {
-            try {
-                var in = new BufferedReader(new InputStreamReader(start().getInputStream()));
-                final var requestLine = in.readLine();
-                final var parts = requestLine.split(" ");
-
-                if (parts.length != 3) {
-                    // just close socket
-                    continue;
+                    if (parts.length != 3) {
+                        // just close socket
+                        continue;
+                    }
+                    final var path = parts[1];
+                    if (!validPaths.contains(path)) {
+                        out.write((Request.code_404()
+                        ).getBytes());
+                        out.flush();
+                        continue;
+                    }
+                    final var filePath = Path.of(".", "public", path);
+                    final var mimeType = Files.probeContentType(filePath);
+                    // special case for classic
+                    if (path.equals("/classic.html")) {
+                        final var template = Files.readString(filePath);
+                        final var content = template.replace(
+                                "{time}",
+                                LocalDateTime.now().toString()
+                        ).getBytes();
+                        out.write((Request.code_200(mimeType, content.length)
+                        ).getBytes());
+                        out.write(content);
+                        out.flush();
+                        continue;
+                    }
+                    final var length = Files.size(filePath);
+                    out.write((Request.code_200(mimeType, length)
+                    ).getBytes());
+                    Files.copy(filePath, out);
+                    out.flush();
                 }
-                return parts;
-            } catch (IOException e) {
-                e.printStackTrace();
             }
-        }
+        });
     }
 }
